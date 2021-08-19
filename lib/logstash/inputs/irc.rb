@@ -6,9 +6,84 @@ require "stud/task"
 require "stud/interval"
 
 require "java"
+require "cinch"
 
 # Read events from an IRC Server.
 #
+module Cinch
+  class IRC
+    def send_cap_req
+      caps = [:"away-notify", :"multi-prefix", :sasl, :"twitch.tv/tags"] & @network.capabilities
+
+      # InspIRCd doesn't respond to empty REQs, so send an END in that
+      # case.
+      if caps.size > 0
+        send "CAP REQ :" + caps.join(" ")
+      else
+        send_cap_end
+      end
+    end
+  end
+
+  class Message
+    attr_reader :tags
+
+    def parse_tags(raw_tags)
+     return {} if raw_tags.nil?
+
+     def to_symbol(string)
+       return string.gsub(/-/, "_").downcase.to_sym
+     end
+
+     tags = {}
+     raw_tags.split(";").each do |tag|
+       tag_name, tag_value = tag.split("=")
+       if tag_value =~ /,/
+         tag_value = tag_value.split(',')
+       elsif tag_value.nil?
+         tag_value = tag_name
+       end
+       if tag_name =~ /\//
+         vendor, tag_name = tag_name.split('/')
+         tags[to_symbol(vendor)] = {
+           to_symbol(tag_name) => tag_value
+         }
+       else
+         tags[to_symbol(tag_name)] = tag_value
+       end
+     end
+     return tags
+   end
+
+    def parse
+      match = @raw.match(/(?:^@([^:]+))?(?::?(\S+) )?(\S+)(.*)/)
+      tags, @prefix, @command, raw_params = match.captures
+
+      if @bot.irc.network.ngametv?
+        if @prefix != "ngame"
+          @prefix = "%s!%s@%s" % [@prefix, @prefix, @prefix]
+        end
+      end
+
+      @params  = parse_params(raw_params)
+      @tags    = parse_tags(tags)
+
+      @user    = parse_user
+      @channel, @statusmsg_mode = parse_channel
+      @target  = @channel || @user
+      @server  = parse_server
+      @error   = parse_error
+      @message = parse_message
+
+      @ctcp_message = parse_ctcp_message
+      @ctcp_command = parse_ctcp_command
+      @ctcp_args    = parse_ctcp_args
+
+      @action_message = parse_action_message
+    end
+  end
+end
+
 class LogStash::Inputs::Irc < LogStash::Inputs::Base
 
   config_name "irc"
@@ -67,7 +142,6 @@ class LogStash::Inputs::Irc < LogStash::Inputs::Base
   end
 
   def register
-    require "cinch"
     @user_stats = Hash.new
     @irc_queue = java.util.concurrent.LinkedBlockingQueue.new
     @catch_all = true if  @get_stats
@@ -150,6 +224,9 @@ class LogStash::Inputs::Irc < LogStash::Inputs::Base
           event.set("channel", msg.channel.to_s)
           event.set("nick", msg.user.nick)
           event.set("server", "#{@host}:#{@port}")
+          event.set("tags", msg.tags)
+          event.set("user_id", msg.tags[:user_id])
+          event.set('id', msg.tags[:id])
           # The user's host attribute is an optional part of the message format;
           # when it is not included, `Cinch::User#host` times out waiting for it
           # to be populated, raising an exception; use `Cinch::User#data` to get
