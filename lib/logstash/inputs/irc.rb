@@ -226,6 +226,8 @@ class LogStash::Inputs::Irc < LogStash::Inputs::Base
           event.set("server", "#{@host}:#{@port}")
           event.set("tags", msg.tags)
           event.set("user_id", msg.tags[:user_id])
+          event.set("tmi_sent_ts", msg.tags[:tmi_sent_ts].to_i)
+          event.set("room_id", msg.tags[:room_id])
           event.set('id', msg.tags[:id])
           # The user's host attribute is an optional part of the message format;
           # when it is not included, `Cinch::User#host` times out waiting for it
